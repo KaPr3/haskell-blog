@@ -1,5 +1,10 @@
 import GHC.Utils.Misc (count)
 
+import Text.Parsec
+import Text.Parsec.Char
+import Text.Parsec.Combinator
+import Text.Parsec.String
+
 data MarkdownElem =
     Text String
     | Heading Int String
@@ -34,18 +39,25 @@ after _ [] = []
 ltrim :: String -> String
 ltrim = after ' '
 
+headingParser :: Parser MarkdownElem
+headingParser = do
+    hashes <- many1 $ char '#'
+    spaces
+    name <- many anyChar
+    pure $ Heading (length hashes) name
+
 parseMd :: String -> Markdown
 parseMd text = Markdown $ reverse $ parseMdState Empty (lines text) []
 
 parseMdState :: MarkdownContext -> [String] -> [MarkdownElem] -> [MarkdownElem]
-parseMdState Empty (('#':line):text) parsed = parseMdState Empty text ((Heading number trimmed) : parsed) where
+parseMdState Empty (('#':line):text) parsed = parseMdState Empty text ((Heading number trimmed) : parsed) where -- TODO: rewrite using Parsec
     trimmed = ltrim $ after '#' line
     number = count (\c -> c == '#') line + 1
 parseMdState Empty ("":text) parsed = parseMdState Empty text parsed
 parseMdState Empty (line:text) parsed = parseMdState (ParagraphC [parseLine line]) text parsed
 parseMdState (ParagraphC p) ("":text) parsed = parseMdState Empty text ((Paragraph p) : parsed)
 parseMdState (ParagraphC p) (line:text) parsed = parseMdState (ParagraphC (p ++ [parseLine line])) text parsed
-parseMdState (ParagraphC p) [] parsed =  (Paragraph p) : parsed
+parseMdState (ParagraphC p) [] parsed = (Paragraph p) : parsed
 parseMdState _ [] parsed = parsed
 
 parseLine :: String -> MarkdownElem
