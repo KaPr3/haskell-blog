@@ -64,7 +64,7 @@ renderElem (Paragraph xs) = el "p" $ concat $ map renderElem xs
 renderElem (Bold element) = el "b" $ renderElem element
 renderElem (Italic element) = el "em" $ renderElem element
 renderElem (BoldAndItalic element) = el "em" $ el "b" $ renderElem element
-renderElem (Strikethrough element) = el "strike" $ renderElem element -- TODO: lookup actual html
+renderElem (Strikethrough element) = el "s" $ renderElem element
 
 convert :: String -> String
 convert = renderAsHtml . parseMd
