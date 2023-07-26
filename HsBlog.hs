@@ -29,7 +29,7 @@ data Markdown = Markdown [MarkdownElem]
     deriving (Show)
 
 data MarkdownContext =
-    Empty
+    EmptyC
     | ParagraphC [MarkdownElem]
 
 after :: Char -> String -> String
@@ -46,19 +46,32 @@ headingParser = do
     name <- many anyChar
     pure $ Heading (length hashes) name
 
-parseMd :: String -> Markdown
-parseMd text = Markdown $ reverse $ parseMdState Empty (lines text) []
+blocks :: [String] -> [[String]]
+blocks texts = filter (not . null) $ reverse $ map reverse $ blocksRec [] texts
 
-parseMdState :: MarkdownContext -> [String] -> [MarkdownElem] -> [MarkdownElem]
-parseMdState Empty (('#':line):text) parsed = parseMdState Empty text ((Heading number trimmed) : parsed) where -- TODO: rewrite using Parsec
-    trimmed = ltrim $ after '#' line
-    number = count (\c -> c == '#') line + 1
-parseMdState Empty ("":text) parsed = parseMdState Empty text parsed
-parseMdState Empty (line:text) parsed = parseMdState (ParagraphC [parseLine line]) text parsed
-parseMdState (ParagraphC p) ("":text) parsed = parseMdState Empty text ((Paragraph p) : parsed)
-parseMdState (ParagraphC p) (line:text) parsed = parseMdState (ParagraphC (p ++ [parseLine line])) text parsed
-parseMdState (ParagraphC p) [] parsed = (Paragraph p) : parsed
-parseMdState _ [] parsed = parsed
+blocksRec :: [[String]] -> [String] -> [[String]]
+blocksRec xs [] = xs
+blocksRec xs ("":texts) = blocksRec ([] : xs) texts
+blocksRec (x:xs) (text:texts) = blocksRec ((text : x) : xs) texts
+blocksRec [] (text:texts) = blocksRec ([[text]]) texts
+
+parseMd :: String -> Markdown
+parseMd text = Markdown $ concat $ map parseBlock (blocks $ lines text)
+
+parseBlock :: [String] -> [MarkdownElem]
+parseBlock = undefined
+
+--parseMdState :: MarkdownContext -> [[String]] -> [MarkdownElem] -> [MarkdownElem]
+--parseMdState = undefined
+--parseMdState EmptyC (('#':line):text) parsed = parseMdState EmptyC text ((Heading number trimmed) : parsed) where -- TODO: rewrite using Parsec
+--    trimmed = ltrim $ after '#' line
+--    number = count (\c -> c == '#') line + 1
+--parseMdState EmptyC ("":text) parsed = parseMdState EmptyC text parsed
+--parseMdState EmptyC (line:text) parsed = parseMdState (ParagraphC [parseLine line]) text parsed
+--parseMdState (ParagraphC p) ("":text) parsed = parseMdState EmptyC text ((Paragraph p) : parsed)
+--parseMdState (ParagraphC p) (line:text) parsed = parseMdState (ParagraphC (p ++ [parseLine line])) text parsed
+--parseMdState (ParagraphC p) [] parsed = (Paragraph p) : parsed
+--parseMdState _ [] parsed = parsed
 
 parseLine :: String -> MarkdownElem
 parseLine = Text -- TODO
