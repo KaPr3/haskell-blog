@@ -1,5 +1,3 @@
-import GHC.Utils.Misc (count)
-
 import Text.Parsec
 import Text.Parsec.Char
 import Text.Parsec.Combinator
@@ -11,8 +9,7 @@ import Data.Functor.Identity
 
 data MarkdownElem =
     Text String
-    | Headings [(Int, String)]
-    | Heading Int String --
+    | Headings [(Int, String)] --
     | Paragraph [MarkdownElem] --
     | Bold MarkdownElem
     | Italic MarkdownElem
@@ -21,6 +18,8 @@ data MarkdownElem =
     | Blockquote [MarkdownElem] --
     | OrderedList [MarkdownElem] --
     | UnorderedList [MarkdownElem] --
+    | OrderedListNum [MarkdownElem] Int --
+    | UnorderedListNum [MarkdownElem] Int --
     | Code MarkdownElem
     | CodeBlock [MarkdownElem] --
     | HorizontalRule
@@ -47,24 +46,33 @@ after _ [] = []
 ltrim :: String -> String
 ltrim = after ' '
 
+count_indent :: String -> Int
+count_indent xs = (num_spaces + num_tabs) `div` 4 where
+    num_spaces = length $ filter (== ' ') xs
+    num_tabs = length $ filter (== '\t') xs
+
 connect :: MarkdownElem -> MarkdownElem -> ParseResult
 connect a (Text "") = Right a
+connect (Text "") a = Right a
 connect (Text a) (Text b) = Right $ Text (a ++ b)
-connect (Heading n a) (Text b) = Right $ Heading n (a ++ b)
-connect (Heading n a) (Heading m b) = Right $ Headings [(n, a), (m, b)]
-connect (Headings xs) (Heading m b) = Right $ Headings (xs ++ [(m, b)])
-connect (Heading n a) (Headings xs) = Right $ Headings ([(n, a)] ++ xs)
-connect (Blockquote a) (Text b) = Right $ Blockquote (a ++ [Text b])
+connect (Headings xs) (Headings ys) = Right $ Headings (xs ++ ys)
 connect (Blockquote a) (Blockquote b) = Right $ Blockquote (a ++ b)
-connect (OrderedList a) (Text b) = Right $ OrderedList (a ++ [Text b])
 connect (OrderedList a) (OrderedList b) = Right $ OrderedList (a ++ b)
-connect (UnorderedList a) (Text b) = Right $ UnorderedList (a ++ [Text b])
 connect (UnorderedList a) (UnorderedList b) = Right $ UnorderedList (a ++ b)
-connect (CodeBlock a) (Text b) = Right $ CodeBlock (a ++ [Text b])
 connect (CodeBlock a) (CodeBlock b) = Right $ CodeBlock (a ++ b)
-connect (Paragraph a) (Text b) = Right $ Paragraph (a ++ [Text b])
 connect (Paragraph a) (Paragraph b) = Right $ Paragraph (a ++ b)
-connect (Text a) (b) = connect b (Text a)
+connect (Headings a) (Text b) = Right $ Headings (a ++ [(1, b)])
+connect (Text a) (Headings b)  = Right $ Headings ((1, a) : b)
+connect (Blockquote a) (Text b) = Right $ Blockquote (a ++ [Text b])
+connect (Text a) (Blockquote b) = Right $ Blockquote ((Text a) : b)
+connect (OrderedList a) (Text b) = Right $ OrderedList (a ++ [Text b])
+connect (Text a) (OrderedList b) = Right $ OrderedList ((Text a) : b)
+connect (UnorderedList a) (Text b) = Right $ UnorderedList (a ++ [Text b])
+connect (Text a) (UnorderedList b) = Right $ UnorderedList ((Text a) : b)
+connect (CodeBlock a) (Text b) = Right $ CodeBlock (a ++ [Text b])
+connect (Text a) (CodeBlock b) = Right $ CodeBlock ((Text a) : b)
+connect (Paragraph a) (Text b) = Right $ Paragraph (a ++ [Text b])
+connect (Text a) (Paragraph b) = Right $ Paragraph ((Text a) : b)
 connect a b = Left $ newErrorMessage (Message msg) (initialPos "Inside") where
     msg = "Error when connecting parsed elements: " ++ (show a) ++ " : " ++ (show b)
 
@@ -79,7 +87,46 @@ headingParser = do
     hashes <- many1 $ char '#'
     spaces
     name <- many anyChar
-    pure $ Heading (length hashes) name
+    pure $ Headings [((length hashes), name)]
+
+blockquoteParser :: Parser MarkdownElem
+blockquoteParser = do
+    char '>'
+    spaces
+    text <- many anyChar
+    pure $ Blockquote [Text text]
+
+oListParser :: Parser MarkdownElem
+oListParser = do
+    indentation <- many $ choice [space, tab]
+    digit
+    char '.'
+    spaces
+    text <- many anyChar
+    pure $ OrderedListNum [Text text] (count_indent indentation)
+
+uListParser :: Parser MarkdownElem
+uListParser = do
+    indentation <- many $ choice [space, tab]
+    spaces
+    oneOf "-*+"
+    spaces
+    text <- many anyChar
+    pure $ UnorderedListNum [Text text] (count_indent indentation)
+
+codeBlockParser :: Parser MarkdownElem
+codeBlockParser = do
+    choice [count 8 space, count 2 tab]
+    text <- many anyChar
+    pure $ CodeBlock [Text text]
+
+lineParser :: Parser MarkdownElem
+lineParser = ((try headingParser)
+                <|> (try blockquoteParser)
+                <|> (try oListParser)
+                <|> (try uListParser)
+                <|> (try codeBlockParser)
+                <|> paragraphParser)
 
 allParser :: Parsec String MarkdownContext MarkdownElem
 allParser = do
@@ -93,6 +140,13 @@ paragraphParser :: Parser MarkdownElem
 paragraphParser = do
     text <- many anyChar
     pure $ Paragraph $ map Text $ lines text
+
+modifyElement :: MarkdownElem -> MarkdownElem
+modifyElement (OrderedListNum xs 0) = OrderedList xs
+modifyElement (OrderedListNum xs n) = OrderedList [modifyElement newelem] where newelem = OrderedListNum xs (n - 1)
+modifyElement (UnorderedListNum xs 0) = UnorderedList xs
+modifyElement (UnorderedListNum xs n) = UnorderedList [modifyElement newelem] where newelem = UnorderedListNum xs (n - 1)
+modifyElement x = x
 
 blocks :: [String] -> [[String]]
 blocks texts = filter (not . null) $ reverse $ map reverse $ blocksRec [] texts
@@ -109,20 +163,8 @@ parseMd text = fmap Markdown (sequence $ map parseBlock (blocks $ lines text))
 parseBlock :: [String] -> ParseResult
 parseBlock = (foldr connectE (Right (Text ""))) . (map parseLine) -- 
 
---parseMdState :: MarkdownContext -> [[String]] -> [MarkdownElem] -> [MarkdownElem]
---parseMdState = undefined
---parseMdState EmptyC (('#':line):text) parsed = parseMdState EmptyC text ((Heading number trimmed) : parsed) where -- TODO: rewrite using Parsec
---    trimmed = ltrim $ after '#' line
---    number = count (\c -> c == '#') line + 1
---parseMdState EmptyC ("":text) parsed = parseMdState EmptyC text parsed
---parseMdState EmptyC (line:text) parsed = parseMdState (ParagraphC [parseLine line]) text parsed
---parseMdState (ParagraphC p) ("":text) parsed = parseMdState EmptyC text ((Paragraph p) : parsed)
---parseMdState (ParagraphC p) (line:text) parsed = parseMdState (ParagraphC (p ++ [parseLine line])) text parsed
---parseMdState (ParagraphC p) [] parsed = (Paragraph p) : parsed
---parseMdState _ [] parsed = parsed
-
 parseLine :: String -> ParseResult
-parseLine = parse ((try headingParser) <|> paragraphParser) ""
+parseLine line = modifyElement <$> parse lineParser "" line
 
 renderAsHtml :: Markdown -> String
 renderAsHtml (Markdown md) = concat $ map renderElem md
@@ -133,18 +175,28 @@ el e text = "<" ++ e ++ ">" ++ text ++ "</" ++ e ++ ">"
 renderHeading :: (Int, String) -> String
 renderHeading (n, text) = el ("h" ++ num) text where num = show n
 
+renderList :: [MarkdownElem] -> String
+renderList xs = concat $ map (el "li" . renderElem) xs
+
 renderElem :: MarkdownElem -> String
 renderElem (Text text) = text
-renderElem (Heading n text) = el ("h" ++ num) text where num = show n
 renderElem (Headings xs) = concat (map renderHeading xs)
 renderElem (Paragraph xs) = el "p" $ concat $ map renderElem xs
 renderElem (Bold element) = el "b" $ renderElem element
 renderElem (Italic element) = el "em" $ renderElem element
 renderElem (BoldAndItalic element) = el "em" $ el "b" $ renderElem element
 renderElem (Strikethrough element) = el "s" $ renderElem element
+renderElem (Blockquote xs) = el "blockquote" $ concat $ map renderElem xs
+renderElem (OrderedList xs) = el "ol" $ renderList xs
+renderElem (UnorderedList xs) = el "ul" $ renderList xs
+renderElem (CodeBlock xs) = el "code" $ concat $ map renderElem xs
 
 convert :: String -> Either ParseError String
 convert text = renderAsHtml <$> parseMd text
+
+writeIfRight :: Show a => Either a String -> String -> IO ()
+writeIfRight (Right string) file = writeFile file string >> putStrLn "Great success"
+writeIfRight (Left x) _ = putStrLn "failed" >> print x
 
 main :: IO ()
 main = do
@@ -152,8 +204,7 @@ main = do
     let filename = "example copy.md" -- TODO: remove later
     text <- readFile filename
     let md = parseMd text -- TODO: remove later
-    --print md -- TODO: remove later
+    print md -- TODO: remove later
     let res = convert text
-    print res
-
+    writeIfRight res "first.html"
 
