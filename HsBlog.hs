@@ -101,7 +101,7 @@ headingParser = do
 
 blockquoteParser :: Parser MarkdownElem
 blockquoteParser = do
-    char '>'
+    _ <- char '>'
     spaces
     text <- many anyChar
     pure $ Blockquote [Text text]
@@ -109,8 +109,8 @@ blockquoteParser = do
 oListParser :: Parser MarkdownElem
 oListParser = do
     indentation <- many $ choice [space, tab]
-    digit
-    char '.'
+    _ <- digit
+    _ <- char '.'
     spaces
     text <- many anyChar
     pure $ OrderedListNum [Text text] (count_indent indentation)
@@ -119,20 +119,27 @@ uListParser :: Parser MarkdownElem
 uListParser = do
     indentation <- many $ choice [space, tab]
     spaces
-    oneOf "-*+"
+    _ <- oneOf "-*+"
     spaces
     text <- many anyChar
     pure $ UnorderedListNum [Text text] (count_indent indentation)
 
 codeBlockParser :: Parser MarkdownElem
 codeBlockParser = do
-    choice [count 4 space, count 1 tab]
+    _ <- choice [count 4 space, count 1 tab]
     text <- many anyChar
     pure $ CodeBlock [Text text]
+
+horizontalParser :: Parser MarkdownElem
+horizontalParser = do
+    _ <- count 3 (oneOf "*-_")
+    _ <- many (oneOf "*-_")
+    pure HorizontalRule
 
 lineParser :: Parser MarkdownElem
 lineParser = ((try headingParser)
                 <|> (try blockquoteParser)
+                <|> (try horizontalParser)
                 <|> (try oListParser)
                 <|> (try uListParser)
                 <|> (try codeBlockParser)
@@ -225,12 +232,13 @@ renderElem (Blockquote xs) = el "blockquote" $ concat $ map renderElem xs
 renderElem (OrderedList xs) = el "ol" $ renderList xs
 renderElem (UnorderedList xs) = el "ul" $ renderList xs
 renderElem (CodeBlock xs) = el "pre" $ el "code" $ escape $ concat $ map ((++ "\n") . renderElem) xs
+renderElem HorizontalRule = "<hr>"
 
 convert :: String -> Either ParseError String
 convert text = renderAsHtml <$> parseMd text
 
 writeIfRight :: Show a => Either a String -> String -> IO ()
-writeIfRight (Right string) file = writeFile file string >> putStrLn "Great success"
+writeIfRight (Right result) file = writeFile file result >> putStrLn "Great success"
 writeIfRight (Left x) _ = putStrLn "failed" >> print x
 
 main :: IO ()
