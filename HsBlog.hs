@@ -47,9 +47,19 @@ ltrim :: String -> String
 ltrim = after ' '
 
 count_indent :: String -> Int
-count_indent xs = (num_spaces + num_tabs) `div` 4 where
+count_indent xs = (num_spaces + 4 * num_tabs) `div` 4 where
     num_spaces = length $ filter (== ' ') xs
     num_tabs = length $ filter (== '\t') xs
+
+escape :: String -> String
+escape = concat . (map escapeChar)
+    where
+        escapeChar '<' = "&lt"
+        escapeChar '>' = "&gt"
+        escapeChar '&' = "&amp"
+        escapeChar '"' = "&quot;"
+        escapeChar '\'' = "&#39;"
+        escapeChar x = [x]
 
 connect :: MarkdownElem -> MarkdownElem -> ParseResult
 connect a (Text "") = Right a
@@ -116,7 +126,7 @@ uListParser = do
 
 codeBlockParser :: Parser MarkdownElem
 codeBlockParser = do
-    choice [count 8 space, count 2 tab]
+    choice [count 4 space, count 1 tab]
     text <- many anyChar
     pure $ CodeBlock [Text text]
 
@@ -141,11 +151,28 @@ paragraphParser = do
     text <- many anyChar
     pure $ Paragraph $ map Text $ lines text
 
+concatListElem :: MarkdownElem -> [MarkdownElem] -> [MarkdownElem]
+concatListElem (OrderedList xs) ((OrderedList ys) : zs) = (OrderedList (xs ++ ys)) : zs
+concatListElem (UnorderedList xs) ((UnorderedList ys) : zs) = (UnorderedList (xs ++ ys)) : zs
+concatListElem x xs = x : xs
+
+concatHtmlList :: MarkdownElem -> MarkdownElem
+concatHtmlList (OrderedList xs) = OrderedList $ map concatHtmlList $ foldr concatListElem [] xs
+concatHtmlList (UnorderedList xs) = UnorderedList $ map concatHtmlList $ foldr concatListElem [] xs
+concatHtmlList x = x
+
+unpackListElem :: MarkdownElem -> MarkdownElem
+unpackListElem (OrderedListNum xs 0) = OrderedList xs
+unpackListElem (OrderedListNum xs n) = OrderedList [unpackListElem newelem] where newelem = OrderedListNum xs (n - 1)
+unpackListElem (UnorderedListNum xs 0) = UnorderedList xs
+unpackListElem (UnorderedListNum xs n) = UnorderedList [unpackListElem newelem] where newelem = UnorderedListNum xs (n - 1)
+unpackListElem x = x
+
 modifyElement :: MarkdownElem -> MarkdownElem
-modifyElement (OrderedListNum xs 0) = OrderedList xs
-modifyElement (OrderedListNum xs n) = OrderedList [modifyElement newelem] where newelem = OrderedListNum xs (n - 1)
-modifyElement (UnorderedListNum xs 0) = UnorderedList xs
-modifyElement (UnorderedListNum xs n) = UnorderedList [modifyElement newelem] where newelem = UnorderedListNum xs (n - 1)
+modifyElement (OrderedListNum xs n) = concatHtmlList $ unpackListElem (OrderedListNum xs n)
+modifyElement (UnorderedListNum xs n) = concatHtmlList $ unpackListElem (UnorderedListNum xs n)
+modifyElement (OrderedList xs) = concatHtmlList $ OrderedList xs
+modifyElement (UnorderedList xs) = concatHtmlList $ UnorderedList xs
 modifyElement x = x
 
 blocks :: [String] -> [[String]]
@@ -161,22 +188,30 @@ parseMd :: String -> Either ParseError Markdown
 parseMd text = fmap Markdown (sequence $ map parseBlock (blocks $ lines text))
 
 parseBlock :: [String] -> ParseResult
-parseBlock = (foldr connectE (Right (Text ""))) . (map parseLine) -- 
+parseBlock = (fmap modifyElement) . (foldr connectE (Right (Text ""))) . (map parseLine) -- 
 
 parseLine :: String -> ParseResult
 parseLine line = modifyElement <$> parse lineParser "" line
 
 renderAsHtml :: Markdown -> String
-renderAsHtml (Markdown md) = concat $ map renderElem md
+renderAsHtml (Markdown md) = htmlHead $ concat $ map renderElem md
+
+htmlHead :: String -> String
+htmlHead x = el "html" (el "head" "" ++ el "body" x)
 
 el :: String -> String -> String
-el e text = "<" ++ e ++ ">" ++ text ++ "</" ++ e ++ ">"
+el e text = "<" ++ e ++ ">" ++ text ++ "</" ++ e ++ ">" ++ "\n"
 
 renderHeading :: (Int, String) -> String
 renderHeading (n, text) = el ("h" ++ num) text where num = show n
 
+renderLi :: MarkdownElem -> String
+renderLi (OrderedList xs) = renderElem $ OrderedList xs
+renderLi (UnorderedList xs) = renderElem $ UnorderedList xs
+renderLi x = (el "li" . renderElem) x
+
 renderList :: [MarkdownElem] -> String
-renderList xs = concat $ map (el "li" . renderElem) xs
+renderList xs = concat $ map renderLi xs
 
 renderElem :: MarkdownElem -> String
 renderElem (Text text) = text
@@ -189,7 +224,7 @@ renderElem (Strikethrough element) = el "s" $ renderElem element
 renderElem (Blockquote xs) = el "blockquote" $ concat $ map renderElem xs
 renderElem (OrderedList xs) = el "ol" $ renderList xs
 renderElem (UnorderedList xs) = el "ul" $ renderList xs
-renderElem (CodeBlock xs) = el "code" $ concat $ map renderElem xs
+renderElem (CodeBlock xs) = el "pre" $ el "code" $ escape $ concat $ map ((++ "\n") . renderElem) xs
 
 convert :: String -> Either ParseError String
 convert text = renderAsHtml <$> parseMd text
@@ -204,7 +239,7 @@ main = do
     let filename = "example copy.md" -- TODO: remove later
     text <- readFile filename
     let md = parseMd text -- TODO: remove later
-    print md -- TODO: remove later
+    --print md -- TODO: remove later
     let res = convert text
     writeIfRight res "first.html"
 
