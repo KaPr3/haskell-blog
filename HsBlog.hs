@@ -145,6 +145,9 @@ lineParser = ((try headingParser)
                 <|> (try codeBlockParser)
                 <|> paragraphParser)
 
+wordParser :: Parser MarkdownElem
+wordParser = undefined --TODO
+
 allParser :: Parsec String MarkdownContext MarkdownElem
 allParser = do
     char '>'
@@ -197,8 +200,21 @@ parseMd text = fmap Markdown (sequence $ map parseBlock (blocks $ lines text))
 parseBlock :: [String] -> ParseResult
 parseBlock = (fmap modifyElement) . (foldr connectE (Right (Text ""))) . (map parseLine) -- 
 
+parseWords :: MarkdownElem -> MarkdownElem
+parseWords (String x) = parse wordParser ""
+parseWords (Paragraph xs) = Paragraph $ map parseWords xs
+parseWords (Bold x) = Bold $ parseWords x
+parseWords (Italic x) = Italic $ parseWords x
+parseWords (BoldAndItalic x) = BoldAndItalic $ parseWords x
+parseWords (Strikethrough x) = Strikethrough $ parseWords x
+parseWords (Blockquote xs) = Blockquote $ map parseWords xs
+parseWords (OrderedList xs) = OrderedList $ map parseWords xs
+parseWords (UnorderedList xs) = UnorderedList $ map parseWords xs
+parseWords (Link x y) = Link (parseWords x) y
+parseWords (LinkTitle x y z) = LinkTitle (parseWords x) y z
+
 parseLine :: String -> ParseResult
-parseLine line = modifyElement <$> parse lineParser "" line
+parseLine line = parseWords <$> modifyElement <$> parse lineParser "" line
 
 renderAsHtml :: Markdown -> String
 renderAsHtml (Markdown md) = htmlHead $ concat $ map renderElem md
